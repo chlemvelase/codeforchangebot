@@ -1,31 +1,31 @@
+// index.js
 const express = require("express");
 const axios = require("axios");
 const app = express();
 
+// Parse incoming JSON payloads
 app.use(express.json());
 
 // Load tokens from environment variables
 const WHAPI_TOKEN = process.env.WHAPI_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-if (!WHAPI_TOKEN || !OPENAI_API_KEY) {
-  console.error("ERROR: Missing WHAPI_TOKEN or OPENAI_API_KEY environment variables");
-  process.exit(1);
-}
-
 app.post("/webhook", async (req, res) => {
   try {
     const incoming = req.body;
-    // console.log("Incoming webhook payload:", incoming);
 
-    const userMsg = incoming.message?.text?.body;
-    const from = incoming.from;
-
-    if (!userMsg || !from) {
-      return res.status(400).send("Invalid payload: missing message text or sender");
+    // Check if message payload exists
+    const message = incoming.messages && incoming.messages[0];
+    if (!message || !message.text || !message.text.body || !message.from) {
+      return res.status(400).send("Invalid payload");
     }
 
-    // Call OpenAI Chat Completion API
+    const userMsg = message.text.body;
+    const from = message.from;
+
+    console.log(`Received message from ${from}: ${userMsg}`);
+
+    // Call OpenAI API for response
     const openaiResponse = await axios.post(
       "https://api.openai.com/v1/chat/completions",
       {
@@ -34,7 +34,7 @@ app.post("/webhook", async (req, res) => {
           {
             role: "system",
             content:
-              "You are Code for Change assistant. Answer questions about hosting plans and campaign clearly and helpfully.",
+              "You are Code for Change assistant. Answer questions about hosting plans and campaign.",
           },
           { role: "user", content: userMsg },
         ],
@@ -50,8 +50,9 @@ app.post("/webhook", async (req, res) => {
     );
 
     const botReply = openaiResponse.data.choices[0].message.content;
+    console.log(`OpenAI reply: ${botReply}`);
 
-    // Send reply back to WhatsApp user via Whapi.Cloud API
+    // Send reply back via Whapi.Cloud API
     await axios.post(
       "https://gate.whapi.cloud/messages/text",
       {
@@ -66,20 +67,21 @@ app.post("/webhook", async (req, res) => {
       }
     );
 
-    // Respond to Whapi.Cloud that webhook processed successfully
+    // Respond OK to webhook request
     res.sendStatus(200);
   } catch (error) {
-    console.error("Error processing webhook:", error.response?.data || error.message);
+    console.error("Error in webhook:", error.response?.data || error.message);
     res.sendStatus(500);
   }
 });
 
-// Health check endpoint
+// Health check route
 app.get("/", (req, res) => {
-  res.send("Code for Change WhatsApp AI Bot is running");
+  res.send("Code for Change WhatsApp AI Bot is running.");
 });
 
+// Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Webhook server listening on port ${PORT}`);
+  console.log(`Webhook server running on port ${PORT}`);
 });
