@@ -1,15 +1,40 @@
 const express = require('express');
 const axios = require('axios');
+const { RateLimiterMemory } = require('rate-limiter-flexible');
 
 const app = express();
 app.use(express.json());
 
+// API Configs
 const TOGETHER_API_URL = 'https://api.together.xyz/v1/chat/completions';
-const TOGETHER_API_KEY = process.env.TOGETHER_API_KEY;
+const TOGETHER_API_KEY = process.env.TOGETHER_API_KEY; // Set in Render
+const WHAPI_URL = 'https://gate.whapi.cloud/messages'; // Whapi endpoint
+const WHAPI_KEY = process.env.WHAPI_KEY; // Set in Render
 
-const WHATSAPP_POST_URL = 'https://api.whatsapp.com/v1/messages'; // Replace with your actual WhatsApp API
-const WHATSAPP_CHANNEL_ID = 'AQUAMN-KGY95'; // Your WhatsApp channel ID
+// Rate limiter: 5 requests/minute (to stay under Together AI's 6)
+const rateLimiter = new RateLimiterMemory({
+  points: 5,
+  duration: 60,
+});
 
+// Send WhatsApp message via Whapi.cloud
+async function sendWhatsAppMessage(chatId, text) {
+  try {
+    await axios.post(WHAPI_URL, {
+      to: chatId,
+      body: text,
+    }, {
+      headers: {
+        'Authorization': `Bearer ${WHAPI_KEY}`,
+        'Content-Type': 'application/json',
+      },
+    });
+  } catch (error) {
+    console.error('WhatsApp API Error:', error.response?.data || error.message);
+  }
+}
+
+// Webhook for incoming messages
 app.post('/webhook', async (req, res) => {
   try {
     const messages = req.body.messages;
@@ -17,52 +42,41 @@ app.post('/webhook', async (req, res) => {
       return res.status(400).send('No messages found');
     }
 
-    const incomingMessage = messages[0];
-    const userText = incomingMessage.text.body;
-    const chatId = incomingMessage.chat_id;
+    const incomingMsg = messages[0];
+    const userText = incomingMsg.text?.body;
+    const chatId = incomingMsg.from; // Whapi uses 'from' instead of 'chat_id'
 
     console.log(`Received from ${chatId}: ${userText}`);
 
-    // TOGETHER AI payload
-    const togetherPayload = {
-      model: "deepseek-ai/DeepSeek-R1-Distill-Llama-70B-free",
-      messages: [
-        {
-          role: "user",
-          content: userText
-        }
-      ]
-    };
+    // Check rate limit
+    try {
+      await rateLimiter.consume(chatId); // Deduct 1 request
+    } catch (rateLimitErr) {
+      await sendWhatsAppMessage(chatId, "⚠️ Too many requests. Please wait...");
+      return res.status(429).send('Rate limited');
+    }
 
     // Call Together AI
-    const togetherResponse = await axios.post(TOGETHER_API_URL, togetherPayload, {
-      headers: {
-        'Authorization': `Bearer ${TOGETHER_API_KEY}`,
-        'Content-Type': 'application/json',
+    const togetherResponse = await axios.post(
+      TOGETHER_API_URL,
+      {
+        model: "deepseek-ai/DeepSeek-R1-Distill-Llama-70B-free",
+        messages: [{ role: "user", content: userText }],
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${TOGETHER_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
       }
-    });
+    );
 
     const aiReply = togetherResponse.data?.choices?.[0]?.message?.content || "Sorry, I couldn’t generate a response.";
 
-    // WhatsApp payload
-    const whatsappPayload = {
-      messages: [
-        {
-          id: `response_${Date.now()}`,
-          from_me: true,
-          type: "text",
-          chat_id: chatId,
-          timestamp: Math.floor(Date.now() / 1000),
-          text: { body: aiReply }
-        }
-      ],
-      channel_id: WHATSAPP_CHANNEL_ID
-    };
+    // Send reply via Whapi
+    await sendWhatsAppMessage(chatId, aiReply);
+    res.status(200).send('OK');
 
-    // Send to WhatsApp API
-    await axios.post(WHATSAPP_POST_URL, whatsappPayload);
-
-    res.status(200).send('Message processed successfully');
   } catch (error) {
     console.error('Webhook error:', error.response?.data || error.message);
     res.status(500).send('Internal Server Error');
