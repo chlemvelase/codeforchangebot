@@ -7,24 +7,25 @@ app.use(express.json());
 // Webhook endpoint
 app.post('/webhook', async (req, res) => {
     try {
+        // Check if there are messages in the request
+        if (!req.body.messages || req.body.messages.length === 0) {
+            return res.status(200).send('OK');
+        }
+
         const message = req.body.messages[0];
         
+        // Only respond to messages from users (not from the bot itself)
         if (message && !message.from_me) {
-            // Extract sender info
             const sender = message.from;
-            const senderName = message.from_name;
+            const responseText = "Thank you for contacting Code for Change. How can we assist you today?";
             
-            // Default response
-            const responseMessage = "Thank you for contacting Code for Change. How can we assist you today?";
-            
-            // Send response
-            await sendMessage(sender, responseMessage);
+            await sendMessage(sender, responseText);
         }
         
         res.status(200).send('OK');
     } catch (error) {
         console.error('Error:', error);
-        res.status(500).send('Internal Server Error');
+        res.status(200).send('OK'); // Still respond OK to avoid webhook failures
     }
 });
 
@@ -37,13 +38,11 @@ async function sendMessage(recipient, text) {
         messages: [{
             to: recipient,
             type: 'text',
-            text: {
-                body: text
-            }
+            text: { body: text }
         }]
     };
 
-    const response = await fetch(url, {
+    await fetch(url, {
         method: 'POST',
         headers: {
             'Authorization': `Bearer ${process.env.WHAPI_KEY}`,
@@ -51,10 +50,6 @@ async function sendMessage(recipient, text) {
         },
         body: JSON.stringify(payload)
     });
-
-    if (!response.ok) {
-        throw new Error(`Failed to send message: ${response.statusText}`);
-    }
 }
 
 // Start server
