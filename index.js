@@ -9,33 +9,69 @@ const PORT = process.env.PORT || 3000;
 const WHAPI_KEY = process.env.WHAPI_KEY;
 const WHAPI_CHANNEL_ID = process.env.WHAPI_CHANNEL_ID;
 
-// WhatsApp message sender with guaranteed delivery
-async function sendWhatsAppMessage(chatId, text, maxRetries = 5) {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+// WhatsApp message sender with ultra-reliable delivery
+async function sendWhatsAppMessage(chatId, text) {
+  const MAX_RETRIES = 3;
+  const RETRY_DELAYS = [1000, 3000, 5000]; // Progressive backoff
+  
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
-      await axios.post('https://gate.whapi.cloud/messages', {
-        to: chatId,
-        body: text,
-        channel_id: WHAPI_CHANNEL_ID
-      }, {
-        headers: {
-          'Authorization': `Bearer ${WHAPI_KEY}`,
-          'Content-Type': 'application/json'
+      // Try direct WHAPI first
+      const response = await axios.post(
+        'https://gate.whapi.cloud/messages',
+        {
+          to: chatId,
+          body: text,
+          channel_id: WHAPI_CHANNEL_ID
         },
-        timeout: 8000
-      });
-      return true; // Success
+        {
+          headers: {
+            'Authorization': `Bearer ${WHAPI_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 5000 // Shorter timeout
+        }
+      );
+      
+      if (response.data?.status === 'sent') {
+        return true;
+      }
     } catch (error) {
-      console.error(`Attempt ${attempt} failed:`, error.message);
-      if (attempt < maxRetries) {
-        await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
+      console.log(`Attempt ${attempt + 1} failed:`, error.message);
+      
+      // Special case: If 404, no point retrying
+      if (error.response?.status === 404) {
+        console.error('Permanent failure - invalid endpoint');
+        break;
+      }
+      
+      if (attempt < MAX_RETRIES - 1) {
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[attempt]));
       }
     }
   }
-  return false; // All retries failed
+  
+  // Fallback: Try alternative WhatsApp API endpoints
+  try {
+    await axios.post(
+      'https://api.whapi.com/v1/messages',
+      { 
+        phone: chatId,
+        body: text 
+      },
+      { 
+        headers: { 'Authorization': WHAPI_KEY },
+        timeout: 3000 
+      }
+    );
+    return true;
+  } catch (fallbackError) {
+    console.error('Fallback API also failed:', fallbackError.message);
+    return false;
+  }
 }
 
-// Webhook with guaranteed response
+// Webhook with bulletproof response handling
 app.post('/webhook', async (req, res) => {
   try {
     const { messages } = req.body;
@@ -43,42 +79,49 @@ app.post('/webhook', async (req, res) => {
 
     const { from: chatId, text } = messages[0];
     const userText = text?.body?.trim();
-    if (!userText) return res.status(400).send('Empty message');
-
-    console.log(`Received from ${chatId}: ${userText}`);
-
-    // Always respond - even if just with an acknowledgement
-    const responseSent = await sendWhatsAppMessage(chatId, 
-      "⌛ Processing your request... (This confirms we received your message)"
-    );
-
-    if (!responseSent) {
-      console.error("FAILED to send WhatsApp confirmation");
-    }
-
-    // Process the actual request (won't block the response)
-    processRequestAsync(chatId, userText);
-
+    
+    console.log(`Received from ${chatId}: ${userText || '<no text>'}`);
+    
+    // IMMEDIATE response to prevent timeouts
     res.status(200).send('OK');
-
+    
+    // Process message in background
+    setTimeout(async () => {
+      try {
+        // Phase 1: Send acknowledgement
+        const ackSent = await sendWhatsAppMessage(
+          chatId, 
+          "✓ Got your message! Processing..."
+        );
+        
+        if (!ackSent) {
+          console.error("Failed to send initial acknowledgement");
+        }
+        
+        // Phase 2: Process and send actual response
+        const finalResponse = "Here's your answer!"; // Replace with AI logic
+        
+        await sendWhatsAppMessage(chatId, finalResponse);
+        
+      } catch (error) {
+        console.error('Background processing failed:', error);
+      }
+    }, 100); // Small delay to ensure HTTP response completes
   } catch (error) {
     console.error('Webhook error:', error);
     res.status(500).send('Internal error');
   }
 });
 
-// Process messages in background
-async function processRequestAsync(chatId, userText) {
-  try {
-    // Your actual AI processing here
-    const finalResponse = "Here's your answer!"; // Replace with real AI call
-    
-    await sendWhatsAppMessage(chatId, finalResponse);
-  } catch (error) {
-    await sendWhatsAppMessage(chatId,
-      "⚠️ We're experiencing high demand. Your request is queued and we'll respond soon."
-    );
-  }
-}
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'OK',
+    timestamp: new Date().toISOString()
+  });
+});
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  console.log('WHAPI Channel:', WHAPI_CHANNEL_ID);
+});
