@@ -4,70 +4,74 @@ const axios = require('axios');
 const app = express();
 app.use(express.json());
 
-const PORT = process.env.PORT || 10000;
-const CHANNEL_ID = process.env.CHANNEL_ID || 'AQUAMN-KGY95';
-const WHAPI_API_KEY = process.env.WHAPI_API_KEY; // Your WhatsApp API key
-const TOGETHER_API_KEY = process.env.TOGETHER_API_KEY; // Your Together AI API key
+const TOGETHER_API_URL = 'https://api.together.ai/v0/chat/completions';
+const TOGETHER_API_KEY = process.env.TOGETHER_API_KEY; // Set this in Render environment variables
 
-// Together AI API details
-const TOGETHER_API_URL = 'https://api.together.ai/v1/chat/completions';
+const WHATSAPP_POST_URL = 'https://api.whatsapp.com/v1/messages'; // Replace with your actual WhatsApp API endpoint if different
+const WHATSAPP_CHANNEL_ID = 'AQUAMN-KGY95'; // Your channel id
 
+// Handle incoming webhook POST from WhatsApp
 app.post('/webhook', async (req, res) => {
   try {
-    const data = req.body;
-    console.log('Received webhook:', JSON.stringify(data, null, 2));
+    const messages = req.body.messages;
+    if (!messages || messages.length === 0) {
+      return res.status(400).send('No messages found');
+    }
 
-    const messages = data.messages || [];
-    if (messages.length === 0) return res.sendStatus(200);
+    const incomingMessage = messages[0];
+    const userText = incomingMessage.text.body;
+    const chatId = incomingMessage.chat_id;
 
-    const message = messages[0];
-    const incomingText = message.text?.body || '';
-    const chatId = message.chat_id;
+    console.log(`Message from ${chatId}: ${userText}`);
 
-    console.log(`Message from ${chatId}: ${incomingText}`);
-
-    // Call Together AI API to get reply
-    const togetherResponse = await axios.post(
-      TOGETHER_API_URL,
-      {
-        model: "gpt-4o-mini", // or your chosen model
-        messages: [{ role: "user", content: incomingText }],
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${TOGETHER_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-
-    const aiReply = togetherResponse.data.choices[0].message.content;
-    console.log('Together AI reply:', aiReply);
-
-    // Prepare WhatsApp reply payload
-    const payload = {
+    // Prepare payload for Together AI
+    const togetherPayload = {
+      model: "deepseek-ai/DeepSeek-R1-Distill-Llama-70B-free",
       messages: [
         {
-          type: 'text',
-          chat_id: chatId,
-          text: { body: aiReply },
-        },
-      ],
-      channel_id: CHANNEL_ID,
+          role: "user",
+          content: userText
+        }
+      ]
     };
 
-    // Send reply message via WhatsApp API
-    await axios.post('https://api.whapi.cloud/1mt2xet1/messages', payload, {
-      headers: { Authorization: `Bearer ${WHAPI_API_KEY}` },
+    // Call Together AI API
+    const togetherResponse = await axios.post(TOGETHER_API_URL, togetherPayload, {
+      headers: {
+        'Authorization': `Bearer ${TOGETHER_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
     });
 
-    res.sendStatus(200);
+    const aiReply = togetherResponse.data.choices[0].message.content;
+
+    // Prepare WhatsApp reply payload
+    const whatsappPayload = {
+      messages: [
+        {
+          id: `response_${Date.now()}`,
+          from_me: true,
+          type: "text",
+          chat_id: chatId,
+          timestamp: Math.floor(Date.now() / 1000),
+          text: { body: aiReply }
+        }
+      ],
+      channel_id: WHATSAPP_CHANNEL_ID
+    };
+
+    // Send reply message to WhatsApp API
+    await axios.post(WHATSAPP_POST_URL, whatsappPayload);
+
+    res.status(200).send('Message processed');
+
   } catch (error) {
-    console.error('Error in webhook:', error.response?.data || error.message);
-    res.sendStatus(500);
+    console.error('Error in webhook:', error.response ? error.response.data : error.message);
+    res.status(500).send('Internal Server Error');
   }
 });
 
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Bot running on port ${PORT}`);
+  console.log(`Server listening on port ${PORT}`);
 });
