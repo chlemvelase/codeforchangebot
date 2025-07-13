@@ -1,35 +1,40 @@
 const express = require('express');
 const axios = require('axios');
 const { RateLimiterMemory } = require('rate-limiter-flexible');
+const NodeCache = require('node-cache');
 
 const app = express();
 app.use(express.json());
 
-// Configuration - set these in Render.com environment variables
+// Configuration
 const PORT = process.env.PORT || 3000;
 const TOGETHER_API_KEY = process.env.TOGETHER_API_KEY;
 const WHAPI_KEY = process.env.WHAPI_KEY;
-const WHAPI_CHANNEL_ID = process.env.WHAPI_CHANNEL_ID || 'AQUAMN-KGY95'; // Your channel ID
+const WHAPI_CHANNEL_ID = process.env.WHAPI_CHANNEL_ID;
 
-// API endpoints
-const TOGETHER_API_URL = 'https://api.together.xyz/v1/chat/completions';
-const WHAPI_URL = 'https://gate.whapi.cloud/messages';
+// Free Together.ai models with fallback order
+const FREE_MODELS = [
+  "deepseek-ai/DeepSeek-R1-Distill-Llama-70B-free",  // Primary (6 req/min)
+  "togethercomputer/llama-2-7b-chat",                // Fallback 1
+  "togethercomputer/RedPajama-INCITE-7B-Chat"        // Fallback 2
+];
 
-// Rate limiter: 5 requests per minute per user
-const rateLimiter = new RateLimiterMemory({
-  points: 5,
-  duration: 60,
-  blockDuration: 120
+// Cache setup (5 minute TTL)
+const responseCache = new NodeCache({ stdTTL: 300 });
+
+// Rate limiter per user
+const userRateLimiter = new RateLimiterMemory({
+  points: 5,      // 5 requests
+  duration: 60    // per minute
 });
 
-// Simple response cache
-const responseCache = new Map();
-const CACHE_TTL = 300000; // 5 minutes
+// Model-specific rate limit tracker
+const modelRateLimits = new Map();
 
 // Send WhatsApp message with retries
-async function sendWhatsAppMessage(chatId, text, retries = 2) {
+async function sendWhatsAppMessage(chatId, text) {
   try {
-    const response = await axios.post(WHAPI_URL, {
+    await axios.post('https://gate.whapi.cloud/messages', {
       to: chatId,
       body: text,
       channel_id: WHAPI_CHANNEL_ID
@@ -40,95 +45,105 @@ async function sendWhatsAppMessage(chatId, text, retries = 2) {
       },
       timeout: 5000
     });
-    return response.data;
   } catch (error) {
     console.error('WhatsApp Error:', error.response?.data || error.message);
-    if (retries > 0) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      return sendWhatsAppMessage(chatId, text, retries - 1);
-    }
     throw error;
   }
 }
 
-// Generate AI response
-async function getAIResponse(prompt) {
+// Get AI response with model fallback
+async function getAIResponse(prompt, attempt = 0) {
+  if (attempt >= FREE_MODELS.length) {
+    return "⚠️ All AI services are busy. Please try again later.";
+  }
+
+  const model = FREE_MODELS[attempt];
   try {
-    const response = await axios.post(TOGETHER_API_URL, {
-      model: "deepseek-ai/DeepSeek-R1-Distill-Llama-70B-free",
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 500
-    }, {
-      headers: {
-        'Authorization': `Bearer ${TOGETHER_API_KEY}`,
-        'Content-Type': 'application/json'
+    // Check model-specific rate limit
+    if (modelRateLimits.get(model)?.blocked) {
+      throw new Error(`Model ${model} rate limited`);
+    }
+
+    const response = await axios.post(
+      'https://api.together.xyz/v1/chat/completions',
+      {
+        model,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 400
       },
-      timeout: 10000
-    });
-    return response.data?.choices?.[0]?.message?.content || "I couldn't generate a response.";
+      {
+        headers: { Authorization: `Bearer ${TOGETHER_API_KEY}` },
+        timeout: 10000
+      }
+    );
+
+    return response.data.choices[0].message.content;
+
   } catch (error) {
-    console.error('AI Error:', error.response?.data || error.message);
-    return error.response?.data?.error?.type === 'model_rate_limit' 
-      ? "⚠️ Too many requests. Please wait a minute." 
-      : "⚠️ Service unavailable. Please try again later.";
+    console.error(`Attempt ${attempt + 1} failed (${model}):`, error.response?.data || error.message);
+    
+    // Mark model as rate limited if applicable
+    if (error.response?.data?.error?.type === 'model_rate_limit') {
+      modelRateLimits.set(model, { blocked: true });
+      setTimeout(() => modelRateLimits.delete(model), 60000); // Unblock after 1 min
+    }
+
+    // Try next model
+    return getAIResponse(prompt, attempt + 1);
   }
 }
 
 // Webhook endpoint
 app.post('/webhook', async (req, res) => {
   try {
-    const message = req.body.messages?.[0];
-    if (!message) return res.status(400).send('Invalid message format');
+    const { messages } = req.body;
+    if (!messages?.length) return res.status(400).send('No messages');
 
-    const chatId = message.from;
-    const userText = message.text?.body?.trim();
+    const { from: chatId, text } = messages[0];
+    const userText = text?.body?.trim();
     if (!userText) return res.status(400).send('Empty message');
 
     console.log(`Received from ${chatId}: ${userText}`);
 
-    // Check rate limit
+    // Check user rate limit
     try {
-      await rateLimiter.consume(chatId);
+      await userRateLimiter.consume(chatId);
     } catch {
-      await sendWhatsAppMessage(chatId, "⏳ Please wait before sending more messages.");
+      await sendWhatsAppMessage(chatId, "⏳ Please wait a minute before sending more messages.");
       return res.status(429).send('Rate limited');
     }
 
     // Check cache
-    const cached = responseCache.get(userText);
-    if (cached && (Date.now() - cached.timestamp) < CACHE_TTL) {
-      await sendWhatsAppMessage(chatId, cached.response);
+    const cachedResponse = responseCache.get(userText);
+    if (cachedResponse) {
+      await sendWhatsAppMessage(chatId, cachedResponse);
       return res.send('OK (cached)');
     }
 
-    // Get and send response
+    // Get AI response
     const aiResponse = await getAIResponse(userText);
     await sendWhatsAppMessage(chatId, aiResponse);
     
     // Cache response
-    responseCache.set(userText, {
-      response: aiResponse,
-      timestamp: Date.now()
-    });
-
+    responseCache.set(userText, aiResponse);
     res.send('OK');
+
   } catch (error) {
     console.error('Webhook error:', error);
     res.status(500).send('Internal error');
   }
 });
 
-// Health check
+// Health endpoint
 app.get('/health', (req, res) => {
   res.json({
     status: 'OK',
-    time: new Date().toISOString(),
-    cacheSize: responseCache.size
+    models: FREE_MODELS.map(model => ({
+      name: model,
+      blocked: !!modelRateLimits.get(model)?.blocked
+    })),
+    cacheSize: responseCache.keys().length
   });
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Using WhatsApp channel: ${WHAPI_CHANNEL_ID}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
