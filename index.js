@@ -1,56 +1,61 @@
 const express = require("express");
 const axios = require("axios");
+require("dotenv").config();
+
 const app = express();
 app.use(express.json());
 
 const WHAPI_TOKEN = process.env.WHAPI_TOKEN;
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY; // From OpenRouter
+const TOGETHER_API_KEY = process.env.TOGETHER_API_KEY;
+
+const MODEL = "mistralai/Mistral-7B-Instruct-v0.2"; // Change this if needed
 
 app.post("/webhook", async (req, res) => {
   try {
     const incoming = req.body;
-    const userMsg = incoming.message?.text?.body;
-    const from = incoming.from;
-
-    console.log("Received message from", from + ":", userMsg);
+    const userMsg = incoming?.messages?.[0]?.text?.body;
+    const from = incoming?.messages?.[0]?.from;
 
     if (!userMsg || !from) {
+      console.log("Invalid payload:", incoming);
       return res.status(400).send("Invalid payload");
     }
 
-    // Step 1: Call DeepSeek via OpenRouter
-    const aiResponse = await axios.post(
-      "https://openrouter.ai/api/v1/chat/completions",
+    console.log("Received message from", from + ":", userMsg);
+
+    // Call Together AI
+    const togetherResponse = await axios.post(
+      "https://api.together.xyz/v1/chat/completions",
       {
-        model: "deepseek-chat", // or "deepseek-coder"
+        model: MODEL,
         messages: [
           {
             role: "system",
             content:
-              "You are Code for Change's helpful assistant. Answer questions about hosting, websites, or getting started with the campaign.",
+              "You are Code for Change assistant. Answer questions about hosting plans, website help, and the campaign. Be helpful, warm, and clear.",
           },
           { role: "user", content: userMsg },
         ],
-        temperature: 0.7,
         max_tokens: 500,
+        temperature: 0.7,
       },
       {
         headers: {
-          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-          "HTTP-Referer": "https://codeforchange.org", // Replace with your domain
+          Authorization: `Bearer ${TOGETHER_API_KEY}`,
           "Content-Type": "application/json",
         },
       }
     );
 
-    const reply = aiResponse.data.choices[0].message.content;
+    const botReply = togetherResponse.data.choices[0].message.content;
+    console.log("Bot reply:", botReply);
 
-    // Step 2: Send reply to WhatsApp user
+    // Send reply to WhatsApp via Whapi
     await axios.post(
       "https://gate.whapi.cloud/messages/text",
       {
         to: from,
-        text: reply,
+        text: botReply,
       },
       {
         headers: {
@@ -67,7 +72,7 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () =>
-  console.log(`🚀 Code for Change bot running on port ${PORT}`)
-);
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => {
+  console.log(`🚀 Code for Change bot running on port ${PORT}`);
+});
