@@ -1,63 +1,56 @@
-// index.js
 const express = require("express");
 const axios = require("axios");
 const app = express();
-
-// Parse incoming JSON payloads
 app.use(express.json());
 
-// Load tokens from environment variables
 const WHAPI_TOKEN = process.env.WHAPI_TOKEN;
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY; // From OpenRouter
 
 app.post("/webhook", async (req, res) => {
   try {
     const incoming = req.body;
+    const userMsg = incoming.message?.text?.body;
+    const from = incoming.from;
 
-    // Check if message payload exists
-    const message = incoming.messages && incoming.messages[0];
-    if (!message || !message.text || !message.text.body || !message.from) {
+    console.log("Received message from", from + ":", userMsg);
+
+    if (!userMsg || !from) {
       return res.status(400).send("Invalid payload");
     }
 
-    const userMsg = message.text.body;
-    const from = message.from;
-
-    console.log(`Received message from ${from}: ${userMsg}`);
-
-    // Call OpenAI API for response
-    const openaiResponse = await axios.post(
-      "https://api.openai.com/v1/chat/completions",
+    // Step 1: Call DeepSeek via OpenRouter
+    const aiResponse = await axios.post(
+      "https://openrouter.ai/api/v1/chat/completions",
       {
-        model: "gpt-3.5-turbo",
+        model: "deepseek-chat", // or "deepseek-coder"
         messages: [
           {
             role: "system",
             content:
-              "You are Code for Change assistant. Answer questions about hosting plans and campaign.",
+              "You are Code for Change's helpful assistant. Answer questions about hosting, websites, or getting started with the campaign.",
           },
           { role: "user", content: userMsg },
         ],
-        max_tokens: 500,
         temperature: 0.7,
+        max_tokens: 500,
       },
       {
         headers: {
-          Authorization: `Bearer ${OPENAI_API_KEY}`,
+          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+          "HTTP-Referer": "https://codeforchange.org", // Replace with your domain
           "Content-Type": "application/json",
         },
       }
     );
 
-    const botReply = openaiResponse.data.choices[0].message.content;
-    console.log(`OpenAI reply: ${botReply}`);
+    const reply = aiResponse.data.choices[0].message.content;
 
-    // Send reply back via Whapi.Cloud API
+    // Step 2: Send reply to WhatsApp user
     await axios.post(
       "https://gate.whapi.cloud/messages/text",
       {
         to: from,
-        text: botReply,
+        text: reply,
       },
       {
         headers: {
@@ -67,7 +60,6 @@ app.post("/webhook", async (req, res) => {
       }
     );
 
-    // Respond OK to webhook request
     res.sendStatus(200);
   } catch (error) {
     console.error("Error in webhook:", error.response?.data || error.message);
@@ -75,13 +67,7 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// Health check route
-app.get("/", (req, res) => {
-  res.send("Code for Change WhatsApp AI Bot is running.");
-});
-
-// Start server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Webhook server running on port ${PORT}`);
-});
+app.listen(PORT, () =>
+  console.log(`🚀 Code for Change bot running on port ${PORT}`)
+);
