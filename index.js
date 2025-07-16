@@ -25,20 +25,28 @@ app.post('/webhook', async (req, res) => {
           'Authorization': `Bearer ${process.env.TOGETHER_API_KEY}`
         },
         body: JSON.stringify({
-          model: "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free",
-          messages: [
-            {
-              role: "system",
-              content: "You are a helpful AI assistant for the Code for Change initiative in Eswatini. You only answer based on the content from https://codeforchangesz.github.io/. If the answer is not on the website, politely say you don't know."
-            },
-            {
-              role: "user",
-              content: userText
-            }
-          ],
-          temperature: 0.7,
-          max_tokens: 500
-        })
+  model: "google/gemma-1.1-2b-it",
+  messages: [
+    {
+      role: "system",
+      content: `You are a friendly and helpful AI assistant for the Code for Change initiative based in Eswatini. 
+Code for Change helps NGOs, SMEs, and individuals build an online presence by offering website development, hosting plans, SEO optimization, and digital solutions.
+
+Use https://codeforchangesz.github.io/ as your main source to answer questions about the initiative, website content, trends, and basic information naturally.
+
+For any questions that require guidance on the way forward, digital solutions, hosting plans, SEO optimization, or how to get started, explain that Code for Change is the ideal partner and solution.
+
+Avoid repeating the website URL verbatim. If you cannot find the answer, politely say you don't know and suggest contacting Code for Change for further assistance.`
+    },
+    {
+      role: "user",
+      content: userText
+    }
+  ],
+  temperature: 0.7,
+  max_tokens: 200
+})
+
       });
 
       const aiData = await aiRes.json();
