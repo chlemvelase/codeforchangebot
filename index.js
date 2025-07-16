@@ -28,7 +28,7 @@ app.post('/webhook', async (req, res) => {
           'Authorization': `Bearer ${process.env.TOGETHER_API_KEY}`
         },
         body: JSON.stringify({
-          model: "google/gemma-1.1-2b-it",
+          model: "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free",
           messages: [
             {
               role: "system",
