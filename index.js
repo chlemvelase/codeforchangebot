@@ -1,6 +1,6 @@
 // index.js
 const express = require('express');
-const fetch = require('node-fetch'); // node-fetch@2 for compatibility
+const fetch = require('node-fetch'); // Use node-fetch@2 for Render compatibility
 require('dotenv').config();
 
 const app = express();
@@ -17,14 +17,14 @@ app.post('/webhook', async (req, res) => {
 
   if (phone && userText) {
     try {
-      // 🔗 Call Together AI with LLaMA 3.3 70B Instruct Turbo Free
+      // 🔗 Call Together AI (Gemma) to generate a reply
       const aiRes = await fetch('https://api.together.xyz/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${process.env.TOGETHER_API_KEY}`
         },
-        body: JSON.stringify({
+      body: JSON.stringify({
   model: "google/gemma-1.1-2b-it",
   messages: [
     {
@@ -52,7 +52,7 @@ Avoid repeating the website URL verbatim. If you cannot find the answer, politel
       const aiData = await aiRes.json();
       const aiReply = aiData?.choices?.[0]?.message?.content || "Sorry, I couldn't understand that.";
 
-      // 📤 Send the AI response back via WhatsApp (WhatAppi)
+      // 📤 Send the AI response back via WhatsApp
       const whatsappRes = await fetch('https://gate.whapi.cloud/messages/text', {
         method: 'POST',
         headers: {
@@ -71,8 +71,6 @@ Avoid repeating the website URL verbatim. If you cannot find the answer, politel
     } catch (err) {
       console.error('Error:', err);
     }
-  } else {
-    console.log('Missing phone or user text in message.');
   }
 
   res.sendStatus(200);
