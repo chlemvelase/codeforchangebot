@@ -1,59 +1,40 @@
 const express = require('express');
 const fetch = require('node-fetch');
-
 const app = express();
+const PORT = process.env.PORT || 3000;
+
 app.use(express.json());
 
-// Webhook endpoint
 app.post('/webhook', async (req, res) => {
+  console.log('Incoming message:', JSON.stringify(req.body, null, 2));
+
+  const phone = req.body?.messages?.[0]?.from;
+
+  if (phone) {
     try {
-        // Check if there are messages in the request
-        if (!req.body.messages || req.body.messages.length === 0) {
-            return res.status(200).send('OK');
-        }
-
-        const message = req.body.messages[0];
-        
-        // Only respond to messages from users (not from the bot itself)
-        if (message && !message.from_me) {
-            const sender = message.from;
-            const responseText = "Thank you for contacting Code for Change. How can we assist you today?";
-            
-            await sendMessage(sender, responseText);
-        }
-        
-        res.status(200).send('OK');
-    } catch (error) {
-        console.error('Error:', error);
-        res.status(200).send('OK'); // Still respond OK to avoid webhook failures
-    }
-});
-
-// Function to send WhatsApp message
-async function sendMessage(recipient, text) {
-    const url = 'https://whapi.cloud/v1/messages';
-    
-    const payload = {
-        channel_id: process.env.WHAPI_CHANNEL_ID,
-        messages: [{
-            to: recipient,
-            type: 'text',
-            text: { body: text }
-        }]
-    };
-
-    await fetch(url, {
+      const response = await fetch('https://gate.whapi.cloud/messages/text', {
         method: 'POST',
         headers: {
-            'Authorization': `Bearer ${process.env.WHAPI_KEY}`,
-            'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.WHAPI_KEY}`
         },
-        body: JSON.stringify(payload)
-    });
-}
+        body: JSON.stringify({
+          to: phone,
+          body: 'Thank you. Our sales team will be in touch soon.',
+          channelId: process.env.WHAPI_CHANNEL_ID
+        })
+      });
 
-// Start server
-const PORT = process.env.PORT || 3000;
+      const data = await response.json();
+      console.log('Message sent:', data);
+    } catch (error) {
+      console.error('Error sending message:', error);
+    }
+  }
+
+  res.sendStatus(200);
+});
+
 app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+  console.log(`Server is running on port ${PORT}`);
 });
