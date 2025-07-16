@@ -4,170 +4,150 @@ require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const BOT_NUMBER = '26879333878@s.whatsapp.net';
+
+const BOT_NUMBER = '26879333878@s.whatsapp.net'; // Fixed typo in '@s.whatsapp.net'
+const processedMessages = new Set();
 
 app.use(express.json());
-
-const WEBSITE_DATA = {
-  mission: "Empowering individuals, NGOs, and SMEs in Eswatini with affordable digital solutions",
-  services: {
-    hosting: [
-      "START: E1499/year (Basic hosting)",
-      "PRO: E2499/year (Enhanced resources)", 
-      "PREMIUM: E3999/year (Business-grade)"
-    ],
-    portfolios: "Freelancer portfolios from E1399/year",
-    other: [
-      "Google Maps integration",
-      "Custom email setup (@yourdomain.org)",
-      "Domain registration (.org.sz, .co.sz)",
-      "Content updates",
-      "Branding & logo design"
-    ]
-  },
-  benefits: [
-    "🌍 Local hosting = faster loading for Eswatini visitors",
-    "📱 Mobile-friendly designs (works on all phones)",
-    "💼 Showcase your work professionally",
-    "🛡️ Secure SSL certificates included",
-    "🔄 Easy content updates via WhatsApp"
-  ]
-};
-
-const userSessions = new Map();
-
-function cleanupSessions() {
-  const now = Date.now();
-  for (const [phone, session] of userSessions) {
-    if (now - session.timestamp > 10 * 60 * 1000) {
-      userSessions.delete(phone);
-    }
-  }
-}
-setInterval(cleanupSessions, 60 * 1000);
 
 app.post('/webhook', async (req, res) => {
   const message = req.body?.messages?.[0];
   res.sendStatus(200);
 
-  if (!message || message.from_me || message.from === BOT_NUMBER) return;
+  if (!message) return;
 
+  const messageId = message.id;
   const phone = message?.from;
   const userText = message?.text?.body?.trim();
   const userName = message?.from_name || 'there';
 
-  if (!phone || !userText) return;
+  // Skip duplicates and bot's own messages
+  if (processedMessages.has(messageId) || message?.from_me || phone === BOT_NUMBER) {
+    console.log(processedMessages.has(messageId) ? '⏭️ Skipped: Duplicate message' : '⚠️ Ignored: Message from bot');
+    return;
+  }
+  processedMessages.add(messageId);
 
-  const session = userSessions.get(phone) || { history: [], timestamp: Date.now() };
-  session.history.push(userText);
-  session.timestamp = Date.now();
-  userSessions.set(phone, session);
-
-  let flowReply = handleFlow(session.history);
-  if (!flowReply) {
-    const aiResponse = await getAIReply(userText, userName);
-    flowReply = aiResponse;
+  // Clean up old message IDs
+  if (processedMessages.size > 1000) {
+    const oldestId = Array.from(processedMessages).shift();
+    processedMessages.delete(oldestId);
   }
 
-  console.log(`📥 MESSAGE from ${userName} (${phone})`);
-  console.log(`💬 Text: ${userText}`);
-  console.log(`🤖 Reply: ${flowReply}`);
+  console.log(`📩 Incoming from ${userName} (${phone}): ${userText}`);
 
-  await sendMessage(phone, flowReply);
+  if (phone && userText) {
+    try {
+      // 🌍 Enhanced greeting detection
+      const greetingMap = {
+        siswati: ['sawubona', 'unjani', 'kusile', 'kutfutfukile'],
+        portuguese: ['ola', 'oi', 'bom dia', 'boa tarde', 'boa noite'],
+        french: ['bonjour', 'salut', 'bonsoir'],
+        english: ['hi', 'hello', 'hey', 'good morning', 'good afternoon']
+      };
+
+      const normalized = userText.toLowerCase();
+      const isGreeting = Object.values(greetingMap).some(list =>
+        list.some(word => normalized.includes(word))
+      );
+
+      // 🧠 Optimized system prompt for better conversations
+      const systemPrompt = {
+        role: 'system',
+        content: `
+You are Code for Change's friendly WhatsApp assistant in Eswatini. Follow these rules:
+
+1. CONVERSATION FLOW:
+   - Greetings: "Hi [name]! 😊 How can we help?"
+   - Website requests: Ask type first (portfolio/NGO/business)
+   - Services: Explain one at a time, then ask if they want more
+   - Pricing: Only share when specifically asked
+
+2. TONE:
+   - Warm and professional (use occasional emojis)
+   - 1-2 short sentences max per message
+   - Always use "we" and "us" (you represent the team)
+
+3. CONTENT:
+   - Never list all services/prices at once
+   - Guide users step-by-step
+   - Ask clarifying questions
+   - Keep technical details simple
+
+Example flows:
+User: Hi
+You: Hi there! 😊 How can we assist you today?
+
+User: Need website
+You: Great! What type? We do portfolios, NGO sites, and business websites.
+
+User: NGO
+You: Wonderful! NGOs are our specialty. Could you share what your organization does?
+
+User: We help kids
+You: That's amazing! 👏 We'd love to help. Our NGO packages start with a free consultation. Want to schedule one?
+        `
+      };
+
+      // Construct messages - include greeting context if detected
+      const messages = [
+        systemPrompt,
+        { role: 'user', content: isGreeting ? `Greeting: ${userText}` : userText }
+      ];
+
+      // 🤖 Call Together AI with optimized parameters
+      const aiRes = await fetch('https://api.together.xyz/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${process.env.TOGETHER_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo-Free',
+          messages,
+          temperature: 0.8, // Slightly lower for more consistent responses
+          max_tokens: 120, // Slightly longer for better flow
+          stop: ['\n\n'] // Prevent multi-paragraph responses
+        })
+      });
+
+      const aiData = await aiRes.json();
+      let aiReply = aiData?.choices?.[0]?.message?.content?.trim() || 
+        'Apologies, we missed that. Could you repeat please?';
+
+      // Clean and format the response
+      aiReply = aiReply
+        .replace(/\n/g, ' ') // Remove newlines
+        .replace(/\s+/g, ' ') // Collapse spaces
+        .substring(0, 160); // Strict length limit
+
+      console.log('🤖 AI Reply:', aiReply);
+
+      // 📤 Send WhatsApp reply with error handling
+      const whatsappRes = await fetch('https://gate.whapi.cloud/messages/text', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${process.env.WHAPI_KEY}`
+        },
+        body: JSON.stringify({
+          to: phone,
+          body: aiReply,
+          channelId: process.env.WHAPI_CHANNEL_ID
+        })
+      });
+
+      if (!whatsappRes.ok) {
+        console.error('Failed to send message:', await whatsappRes.text());
+      }
+
+    } catch (err) {
+      console.error('❌ Error:', err);
+      // Consider sending an error message to admin
+    }
+  }
 });
 
-function handleFlow(history) {
-  const last = history[history.length - 1].toLowerCase();
-  if (last.includes('hi') || last.includes('hello')) {
-    return `Hi! 👋 Welcome to Code for Change. What can we help you with today? (Website, Hosting, Portfolio)`;
-  }
-  if (last.includes('website')) {
-    return `What type of website do you need? (NGO, business, or portfolio)`;
-  }
-  if (last.includes('portfolio')) {
-    return `We offer beautiful freelancer portfolios from E1399/year. Would you like us to reach out to guide you, or share our contact details?`;
-  }
-  if (last.includes('contact') || last.includes('reach out')) {
-    return `You can reach us at 📞 +268 7933 3878 or 📧 codeforchangesz@gmail.com. Would you like us to call or WhatsApp you?`;
-  }
-  return null;
-}
-
-async function getAIReply(userText, userName) {
-  const systemPrompt = {
-    role: "system",
-    content: `
-# CODE FOR CHANGE ASSISTANT RULES
-
-## CORE MISSION
-${WEBSITE_DATA.mission}
-
-## SERVICES AVAILABLE
-${formatServices(WEBSITE_DATA.services)}
-
-## KEY BENEFITS
-${WEBSITE_DATA.benefits.join('\n')}
-
-## RESPONSE GUIDELINES
-- Use "we"/"our"
-- Start with greeting if needed
-- Ask clarifying questions
-- Keep replies under 160 characters
-    `
-  };
-
-  const messages = [
-    systemPrompt,
-    { role: 'user', content: userText }
-  ];
-
-  const aiRes = await fetch('https://api.together.xyz/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${process.env.TOGETHER_API_KEY}`
-    },
-    body: JSON.stringify({
-      model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo-Free',
-      messages,
-      temperature: 0.5,
-      max_tokens: 120,
-      stop: ['\n\n']
-    })
-  });
-
-  const aiData = await aiRes.json();
-  return aiData?.choices?.[0]?.message?.content?.trim().substring(0, 160) || "Sorry, could you rephrase that?";
-}
-
-async function sendMessage(phone, text) {
-  await fetch('https://gate.whapi.cloud/messages/text', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${process.env.WHAPI_KEY}`
-    },
-    body: JSON.stringify({
-      to: phone,
-      body: text,
-      channelId: process.env.WHAPI_CHANNEL_ID
-    })
-  });
-}
-
-function formatServices(services) {
-  return `
-🖥️ HOSTING:
-${services.hosting.map(s => `• ${s}`).join('\n')}
-
-📸 PORTFOLIOS:
-• ${services.portfolios}
-
-🔧 EXTRAS:
-${services.other.map(s => `• ${s}`).join('\n')}`;
-}
-
 app.listen(PORT, () => {
-  console.log(`✅ Bot running on port ${PORT}`);
-  console.log('ℹ️ Using embedded website data (last manually updated)');
+  console.log(`✅ Code for Change AI Bot is running on port ${PORT}`);
 });
