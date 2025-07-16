@@ -1,5 +1,5 @@
 const express = require('express');
-const fetch = require('node-fetch'); // Use node-fetch@2
+const fetch = require('node-fetch'); // node-fetch@2 for compatibility
 require('dotenv').config();
 
 const app = express();
@@ -12,15 +12,79 @@ app.post('/webhook', async (req, res) => {
 
   const message = req.body?.messages?.[0];
   const phone = message?.from;
-  const userText = message?.text?.body;
+  const userText = message?.text?.body?.trim();
+  const userName = message?.from_name || 'there';
 
   if (phone && userText) {
     try {
-      const promptMessage = userText.trim().length < 3
-        ? "Can you please tell me more about what you need help with?"
-        : userText;
+      // Detect simple greetings in SiSwati, Portuguese, or French
+      const greetingMap = {
+        siswati: ['sawubona', 'unjani', 'kusile', 'kutfutfukile'],
+        portuguese: ['ola', 'oi', 'bom dia', 'boa tarde', 'boa noite'],
+        french: ['bonjour', 'salut', 'bonsoir']
+      };
 
-      // 🔗 Call Together AI (Gemma) to generate a reply
+      const normalized = userText.toLowerCase();
+
+      const isGreeting = Object.values(greetingMap).some(list =>
+        list.some(word => normalized.includes(word))
+      );
+
+      const replyIfGreeting = () => `Sawubona ${userName}! 😊 Thanks for reaching out to Code for Change. How can we assist you today?`;
+
+      // 🧠 Define system prompt
+      const systemPrompt = {
+        role: 'system',
+        content: `
+You are an intelligent, friendly AI assistant and team member of the Code for Change initiative in Eswatini.
+
+Speak as part of our team using "we", "our", and "us" — you represent Code for Change.
+
+🔍 Use information from https://codeforchangesz.github.io/ (but don’t quote the URL) to answer questions about:
+- Our mission and impact
+- Services for NGOs, SMEs, and individuals
+- Web, hosting, and digital offerings
+
+💼 Clearly guide users through our services:
+- Website development, SEO, digital solutions
+- Hosting plans (START E1500, PRO E2500, PREMIUM E4000 yearly)
+- Portfolios from E1300/year for individuals and freelancers
+
+💳 Pricing is yearly; 50% minimum deposit required. We accept flexible arrangements — just ask.
+
+🛠️ We also help with:
+- Domain setup, logo & branding
+- Google Maps + Business registration
+- Business email, content updates
+
+👋 For complex questions or collaboration:
+- Encourage contacting us:
+  • Call: +268 7633 3878
+  • Email: codeforchangesz@gmail.com
+
+🤝 Maintain a professional, warm tone. Always be helpful, clear, and natural.
+Do not answer in French/Portuguese/SiSwati unless it's a simple greeting — otherwise, always switch to English.
+        `
+      };
+
+      // 🧠 Compose messages for Together AI
+      const messages = isGreeting
+        ? [
+            systemPrompt,
+            {
+              role: 'user',
+              content: replyIfGreeting()
+            }
+          ]
+        : [
+            systemPrompt,
+            {
+              role: 'user',
+              content: `User: ${userText}`
+            }
+          ];
+
+      // 🌐 Call Together AI (meta-llama)
       const aiRes = await fetch('https://api.together.xyz/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -28,45 +92,22 @@ app.post('/webhook', async (req, res) => {
           'Authorization': `Bearer ${process.env.TOGETHER_API_KEY}`
         },
         body: JSON.stringify({
-          model: "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free",
-          messages: [
-            {
-              role: "system",
-              content: `You are a friendly and helpful AI assistant for the Code for Change initiative based in Eswatini.
-
-Code for Change helps NGOs, SMEs, and individuals build an online presence by offering website development, hosting plans, SEO optimization, and digital solutions.
-
-Use https://codeforchangesz.github.io/ as your main source to answer questions about the initiative, website content, trends, and basic information naturally.
-
-For any questions that require guidance on the way forward, digital solutions, hosting plans, SEO optimization, or how to get started, explain that Code for Change is the ideal partner and solution.
-
-Avoid repeating the website URL verbatim. If you cannot find the answer, politely say you don't know and suggest contacting Code for Change for further assistance.`
-            },
-            {
-              role: "user",
-              content: promptMessage
-            }
-          ],
+          model: 'meta-llama/Llama-3-70B-Instruct',
+          messages,
           temperature: 0.7,
-          max_tokens: 200
+          max_tokens: 400
         })
       });
 
       const aiData = await aiRes.json();
-      console.log("AI raw response:", JSON.stringify(aiData, null, 2));
 
-      let aiReply;
+      const aiReply =
+        aiData?.choices?.[0]?.message?.content?.trim() ||
+        "Sorry, we couldn’t process that. Please try again or contact us directly.";
 
-      if (aiData?.choices?.length > 0 && aiData.choices[0].message?.content) {
-        aiReply = aiData.choices[0].message.content;
-      } else if (aiData?.error) {
-        aiReply = "Sorry, there was a problem getting the answer. Please try again later.";
-        console.error("Together API Error:", aiData.error);
-      } else {
-        aiReply = "Sorry, I couldn't understand that.";
-      }
+      console.log('AI Response:', aiReply);
 
-      // 📤 Send the AI response back via WhatsApp
+      // 📤 Send reply via WhatsApp
       const whatsappRes = await fetch('https://gate.whapi.cloud/messages/text', {
         method: 'POST',
         headers: {
@@ -80,11 +121,10 @@ Avoid repeating the website URL verbatim. If you cannot find the answer, politel
         })
       });
 
-      const data = await whatsappRes.json();
-      console.log('Message sent:', data);
-
+      const whatsappData = await whatsappRes.json();
+      console.log('Message sent:', whatsappData);
     } catch (err) {
-      console.error('Unexpected Error:', err);
+      console.error('Error:', err);
     }
   }
 
@@ -92,5 +132,5 @@ Avoid repeating the website URL verbatim. If you cannot find the answer, politel
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Bot is running on port ${PORT}`);
+  console.log(`✅ Code for Change AI Bot is running on port ${PORT}`);
 });
