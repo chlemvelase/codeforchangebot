@@ -1,5 +1,8 @@
+// index.js
 const express = require('express');
-const fetch = require('node-fetch'); // ✅ Fix for Render using node-fetch@2
+const fetch = require('node-fetch'); // Use node-fetch@2 for Render compatibility
+require('dotenv').config();
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -10,10 +13,39 @@ app.post('/webhook', async (req, res) => {
 
   const message = req.body?.messages?.[0];
   const phone = message?.from;
+  const userText = message?.text?.body;
 
-  if (phone) {
+  if (phone && userText) {
     try {
-      const response = await fetch('https://gate.whapi.cloud/messages/text', {
+      // 🔗 Call Together AI (Gemma) to generate a reply
+      const aiRes = await fetch('https://api.together.xyz/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.TOGETHER_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: "google/gemma-1.1-2b-it",
+          messages: [
+            {
+              role: "system",
+              content: "You are a helpful AI assistant for Code for Change in Eswatini. Respond clearly and informatively based on our initiative."
+            },
+            {
+              role: "user",
+              content: userText
+            }
+          ],
+          temperature: 0.7,
+          max_tokens: 200
+        })
+      });
+
+      const aiData = await aiRes.json();
+      const aiReply = aiData?.choices?.[0]?.message?.content || "Sorry, I couldn't understand that.";
+
+      // 📤 Send the AI response back via WhatsApp
+      const whatsappRes = await fetch('https://gate.whapi.cloud/messages/text', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -21,15 +53,15 @@ app.post('/webhook', async (req, res) => {
         },
         body: JSON.stringify({
           to: phone,
-          body: 'Thank you. Our sales team will be in touch soon.',
+          body: aiReply,
           channelId: process.env.WHAPI_CHANNEL_ID
         })
       });
 
-      const data = await response.json();
+      const data = await whatsappRes.json();
       console.log('Message sent:', data);
     } catch (err) {
-      console.error('Error sending message:', err);
+      console.error('Error:', err);
     }
   }
 
