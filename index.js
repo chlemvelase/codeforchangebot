@@ -92,7 +92,7 @@ Do not answer in French/Portuguese/SiSwati unless it's a simple greeting — oth
           'Authorization': `Bearer ${process.env.TOGETHER_API_KEY}`
         },
         body: JSON.stringify({
-          model: 'meta-llama/Llama-3-70B-Instruct',
+          model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo-Free',
           messages,
           temperature: 0.7,
           max_tokens: 400
