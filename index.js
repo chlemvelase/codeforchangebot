@@ -1,5 +1,5 @@
 const express = require('express');
-const fetch = require('node-fetch');
+const fetch = require('node-fetch'); // ✅ Fix for Render using node-fetch@2
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -8,7 +8,8 @@ app.use(express.json());
 app.post('/webhook', async (req, res) => {
   console.log('Incoming message:', JSON.stringify(req.body, null, 2));
 
-  const phone = req.body?.messages?.[0]?.from;
+  const message = req.body?.messages?.[0];
+  const phone = message?.from;
 
   if (phone) {
     try {
@@ -27,8 +28,8 @@ app.post('/webhook', async (req, res) => {
 
       const data = await response.json();
       console.log('Message sent:', data);
-    } catch (error) {
-      console.error('Error sending message:', error);
+    } catch (err) {
+      console.error('Error sending message:', err);
     }
   }
 
@@ -36,5 +37,5 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+  console.log(`Bot is running on port ${PORT}`);
 });
