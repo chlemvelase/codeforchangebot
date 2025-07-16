@@ -1,22 +1,43 @@
 const express = require('express');
-const fetch = require('node-fetch');
+const fetch = require('node-fetch'); // Already in your original setup
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-
-// WhatsApp number format should include country code without '+' and '@s.whatsapp.net'
-const BOT_NUMBER = '26879333878@s.whatsapp.net'; // Updated format
-
-// Track processed message IDs to prevent duplicates
+const BOT_NUMBER = '26879333878@s.whatsapp.net';
 const processedMessages = new Set();
+
+// Hardcoded data extracted from https://codeforchangesz.github.io/
+const WEBSITE_DATA = {
+  mission: "Empowering individuals, NGOs, and SMEs in Eswatini with affordable digital solutions",
+  services: {
+    hosting: [
+      "START: E1499/year (Basic hosting)",
+      "PRO: E2499/year (Enhanced resources)", 
+      "PREMIUM: E3999/year (Business-grade)"
+    ],
+    portfolios: "Freelancer portfolios from E1399/year",
+    other: [
+      "Google Maps integration",
+      "Custom email setup (@yourdomain.org)",
+      "Domain registration (.org.sz, .co.sz)",
+      "Content updates",
+      "Branding & logo design"
+    ]
+  },
+  benefits: [
+    "🌍 Local hosting = faster loading for Eswatini visitors",
+    "📱 Mobile-friendly designs (works on all phones)",
+    "💼 Showcase your work professionally",
+    "🛡️ Secure SSL certificates included",
+    "🔄 Easy content updates via WhatsApp"
+  ]
+};
 
 app.use(express.json());
 
 app.post('/webhook', async (req, res) => {
   const message = req.body?.messages?.[0];
-  
-  // Immediately respond to the webhook to prevent retries
   res.sendStatus(200);
 
   if (!message) return;
@@ -26,72 +47,56 @@ app.post('/webhook', async (req, res) => {
   const userText = message?.text?.body?.trim();
   const userName = message?.from_name || 'there';
 
-  // Skip if we've already processed this message
-  if (processedMessages.has(messageId)) {
-    console.log('⏭️ Skipped: Duplicate message ID');
+  if (processedMessages.has(messageId) || message?.from_me || phone === BOT_NUMBER) {
+    console.log(processedMessages.has(messageId) ? '⏭️ Skipped duplicate' : '⚠️ Ignored bot message');
     return;
   }
   processedMessages.add(messageId);
 
-  // Clean up old message IDs to prevent memory leaks
-  if (processedMessages.size > 1000) {
-    const oldestId = Array.from(processedMessages).shift();
-    processedMessages.delete(oldestId);
-  }
-
-  console.log(`📩 Incoming from ${userName} (${phone}): ${userText}`);
-
-  // Skip messages from the bot itself (using proper WhatsApp ID format)
-  if (message?.from_me || phone === BOT_NUMBER) {
-    console.log('⚠️ Ignored: Message sent by bot itself');
-    return;
-  }
+  console.log(`📩 From ${userName} (${phone}): ${userText}`);
 
   if (phone && userText) {
     try {
-      // 🌍 Simple greeting detection
-      const greetingMap = {
-        siswati: ['sawubona', 'unjani', 'kusile', 'kutfutfukile'],
-        portuguese: ['ola', 'oi', 'bom dia', 'boa tarde', 'boa noite'],
-        french: ['bonjour', 'salut', 'bonsoir']
-      };
-
-      const normalized = userText.toLowerCase();
-
-      const isGreeting = Object.values(greetingMap).some(list =>
-        list.some(word => normalized.includes(word))
-      );
-
-      const greetingReply = () =>
-        `Sawubona ${userName}! 😊 Thanks for reaching out to Code for Change. How can we assist you today?`;
-
-      // 🧠 AI System prompt
       const systemPrompt = {
-        role: 'system',
+        role: "system",
         content: `
-You are an intelligent, friendly assistant and part of the Code for Change team in Eswatini.
-we are a web developemt agengy do ask what the user whats and following their structure do not flood them with infomtion, do ask if you need more infomatio or help with something else
-✅ Always use "we", "us", or "our" — you represent the team.
-✅ Use information from https://codeforchangesz.github.io/ to answer about:
-  - Our mission, digital services, hosting, websites, branding
-  - Support for NGOs, individuals, and SMEs
-✅ Explain offerings briefly:
-  - Web Hosting: START (E1499), PRO (E2499), PREMIUM (E3999)
-  - Portfolios for freelancers from E1399/year
-  - Google Maps, emails, domains, content updates, branding
+# CODE FOR CHANGE ASSISTANT RULES
 
-💬 Be short (1 paragraph max), warm, and professional.
+## CORE MISSION
+${WEBSITE_DATA.mission}
 
-Do NOT reply in French/Portuguese/SiSwati (except for greetings). Always respond in English.
+## SERVICES AVAILABLE
+${formatServices(WEBSITE_DATA.services)}
+
+## KEY BENEFITS
+${WEBSITE_DATA.benefits.join('\n')}
+
+## RESPONSE GUIDELINES
+1. ALWAYS use "we"/"our" (you're part of the team)
+2. Start with greeting if new conversation
+3. Ask clarifying questions:
+   - For websites: "Is this for an NGO, business, or portfolio?"
+   - For hosting: "Do you need basic (START) or advanced (PRO/PREMIUM)?"
+4. Reveal pricing ONLY when asked directly
+5. Keep messages under 2 sentences (max 160 chars)
+
+## EXAMPLE FLOWS
+User: Hi
+You: Hi ${userName}! 😊 How can we help today?
+
+User: Need website
+You: Great! What type? (NGO/business/portfolio)
+
+User: NGO
+You: We love supporting NGOs! What does your organization do?
         `
       };
 
-      // 🧠 Construct AI conversation
-      const messages = isGreeting
-        ? [systemPrompt, { role: 'user', content: greetingReply() }]
-        : [systemPrompt, { role: 'user', content: `User: ${userText}` }];
+      const messages = [
+        systemPrompt,
+        { role: "user", content: userText }
+      ];
 
-      // 🤖 Call Together AI (meta-llama)
       const aiRes = await fetch('https://api.together.xyz/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -101,20 +106,21 @@ Do NOT reply in French/Portuguese/SiSwati (except for greetings). Always respond
         body: JSON.stringify({
           model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo-Free',
           messages,
-          temperature: 0.7,
-          max_tokens: 200
+          temperature: 0.5,
+          max_tokens: 120,
+          stop: ['\n\n']
         })
       });
 
       const aiData = await aiRes.json();
-      const aiReply =
-        aiData?.choices?.[0]?.message?.content?.trim() ||
-        'Sorry, we couldn\'t process that. Please try again or contact us directly.';
+      let reply = aiData?.choices?.[0]?.message?.content?.trim() || 
+        "Apologies, could you repeat that?";
 
-      console.log('🤖 AI Reply:', aiReply);
+      // Enforce WhatsApp message limits
+      reply = reply.split('. ')[0].substring(0, 160);
+      console.log('🤖 Reply:', reply);
 
-      // 📤 Send WhatsApp message via Whapi
-      const whatsappRes = await fetch('https://gate.whapi.cloud/messages/text', {
+      await fetch('https://gate.whapi.cloud/messages/text', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -122,19 +128,32 @@ Do NOT reply in French/Portuguese/SiSwati (except for greetings). Always respond
         },
         body: JSON.stringify({
           to: phone,
-          body: aiReply,
+          body: reply,
           channelId: process.env.WHAPI_CHANNEL_ID
         })
       });
 
-      const whatsappData = await whatsappRes.json();
-      console.log('📤 Message sent:', whatsappData);
     } catch (err) {
       console.error('❌ Error:', err);
     }
   }
 });
 
+// Helper function to format services
+function formatServices(services) {
+  let text = "🖥️ WEB HOSTING:\n";
+  text += services.hosting.map(s => `• ${s}`).join('\n');
+  
+  text += "\n\n🎨 PORTFOLIOS:\n";
+  text += `• ${services.portfolios}`;
+  
+  text += "\n\n🔧 OTHER SERVICES:\n";
+  text += services.other.map(s => `• ${s}`).join('\n');
+  
+  return text;
+}
+
 app.listen(PORT, () => {
-  console.log(`✅ Code for Change AI Bot is running on port ${PORT}`);
+  console.log(`✅ Bot running on port ${PORT}`);
+  console.log('ℹ️ Using embedded website data (last manually updated)');
 });
