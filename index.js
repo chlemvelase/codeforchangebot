@@ -1,6 +1,6 @@
 // index.js
 const express = require('express');
-const fetch = require('node-fetch'); // Use node-fetch@2 for Render compatibility
+const fetch = require('node-fetch'); // node-fetch@2 for compatibility
 require('dotenv').config();
 
 const app = express();
@@ -17,7 +17,7 @@ app.post('/webhook', async (req, res) => {
 
   if (phone && userText) {
     try {
-      // 🔗 Call Together AI (Gemma) to generate a reply
+      // 🔗 Call Together AI with LLaMA 3.3 70B Instruct Turbo Free
       const aiRes = await fetch('https://api.together.xyz/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -25,11 +25,11 @@ app.post('/webhook', async (req, res) => {
           'Authorization': `Bearer ${process.env.TOGETHER_API_KEY}`
         },
         body: JSON.stringify({
-          model: "google/gemma-1.1-2b-it",
+          model: "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free",
           messages: [
             {
               role: "system",
-              content: "You are a helpful AI assistant for Code for Change in Eswatini. Respond clearly and informatively based on our initiative."
+              content: "You are a helpful AI assistant for the Code for Change initiative in Eswatini. You only answer based on the content from https://codeforchangesz.github.io/. If the answer is not on the website, politely say you don't know."
             },
             {
               role: "user",
@@ -37,14 +37,14 @@ app.post('/webhook', async (req, res) => {
             }
           ],
           temperature: 0.7,
-          max_tokens: 200
+          max_tokens: 500
         })
       });
 
       const aiData = await aiRes.json();
       const aiReply = aiData?.choices?.[0]?.message?.content || "Sorry, I couldn't understand that.";
 
-      // 📤 Send the AI response back via WhatsApp
+      // 📤 Send the AI response back via WhatsApp (WhatAppi)
       const whatsappRes = await fetch('https://gate.whapi.cloud/messages/text', {
         method: 'POST',
         headers: {
@@ -63,6 +63,8 @@ app.post('/webhook', async (req, res) => {
     } catch (err) {
       console.error('Error:', err);
     }
+  } else {
+    console.log('Missing phone or user text in message.');
   }
 
   res.sendStatus(200);
